@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 import * as faceapi from 'face-api.js';
 
-const MODEL_URL = 'https://raw.githubusercontent.com/justadudewhohacks/face-api.js/master/weights';
+const MODEL_URL = '/models';
 const MATCH_THRESHOLD = 0.55; 
 const DETECT_INTERVAL_MS = 800;
 const OBSCURED_CONFIDENCE = 0.5;
+const DETECTOR_OPTIONS = new faceapi.TinyFaceDetectorOptions({ scoreThreshold: 0.45 });
 
 function euclideanDistance(a, b) {
   let sum = 0;
@@ -12,12 +13,16 @@ function euclideanDistance(a, b) {
   return Math.sqrt(sum);
 }
 
-export default function FaceMonitor({ referenceEmbedding, onViolation, onOk }) {
+export default function FaceMonitor({ referenceEmbedding, onViolation, onOk, onBlockChange }) {
   const videoRef = useRef(null);
   const [modelsReady, setModelsReady] = useState(false);
   const [blocked, setBlocked] = useState(false);
   const [message, setMessage] = useState('');
   const [warning, setWarning] = useState('');
+
+  useEffect(() => {
+    onBlockChange?.(blocked);
+  }, [blocked]);
 
   useEffect(() => {
     let cancelled = false;
@@ -62,12 +67,24 @@ export default function FaceMonitor({ referenceEmbedding, onViolation, onOk }) {
 
   useEffect(() => {
     if (!modelsReady || !referenceEmbedding) return;
+    let activeViolationType = null;
+
+    const reportOnce = (type) => {
+      if (activeViolationType !== type) {
+        activeViolationType = type;
+        onViolation({ type });
+      }
+    };
+    const clearViolation = () => {
+      activeViolationType = null;
+    };
+
     const interval = setInterval(async () => {
       const video = videoRef.current;
       if (!video || video.readyState < 2) return;
 
       const detections = await faceapi
-        .detectAllFaces(video, new faceapi.TinyFaceDetectorOptions())
+        .detectAllFaces(video, DETECTOR_OPTIONS)
         .withFaceLandmarks()
         .withFaceDescriptors();
 
@@ -75,7 +92,7 @@ export default function FaceMonitor({ referenceEmbedding, onViolation, onOk }) {
         setBlocked(true);
         setWarning('');
         setMessage('Face not detected. Please face the camera.');
-        onViolation({ type: 'face_not_detected' });
+        reportOnce('face_not_detected');
         return;
       }
 
@@ -83,7 +100,7 @@ export default function FaceMonitor({ referenceEmbedding, onViolation, onOk }) {
         setBlocked(true);
         setWarning('');
         setMessage('Multiple faces detected.');
-        onViolation({ type: 'multiple_faces' });
+        reportOnce('multiple_faces');
         return;
       }
 
@@ -92,7 +109,7 @@ export default function FaceMonitor({ referenceEmbedding, onViolation, onOk }) {
       if (detection.detection.score < OBSCURED_CONFIDENCE) {
         setBlocked(false);
         setWarning('Please make sure your face is fully visible and well lit.');
-        onViolation({ type: 'face_obscured' });
+        reportOnce('face_obscured');
         return;
       }
 
@@ -101,13 +118,14 @@ export default function FaceMonitor({ referenceEmbedding, onViolation, onOk }) {
         setBlocked(true);
         setWarning('');
         setMessage('Face not recognized.');
-        onViolation({ type: 'face_not_recognized' });
+        reportOnce('face_not_recognized');
         return;
       }
 
       setBlocked(false);
       setWarning('');
       setMessage('');
+      clearViolation();
       onOk?.();
     }, DETECT_INTERVAL_MS);
 
@@ -152,7 +170,7 @@ export async function loadModels() {
 
 export async function captureDescriptor(videoEl) {
   const detection = await faceapi
-    .detectSingleFace(videoEl, new faceapi.TinyFaceDetectorOptions())
+    .detectSingleFace(videoEl, DETECTOR_OPTIONS)
     .withFaceLandmarks()
     .withFaceDescriptor();
   return detection ? Array.from(detection.descriptor) : null;

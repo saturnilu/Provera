@@ -2,8 +2,9 @@ import { useEffect, useRef, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { api } from '../api';
-import { socket } from '../socket';
+import { socket, connectSocket } from '../socket';
 import FaceMonitor from '../components/FaceMonitor';
+import { ExamSkeleton } from '../components/Skeleton';
 
 function isAnswered(q, value) {
   if (value === undefined || value === null) return false;
@@ -21,6 +22,7 @@ export default function StudentExam() {
   const [secondsLeft, setSecondsLeft] = useState(0);
   const [answers, setAnswers] = useState({}); 
   const [submitError, setSubmitError] = useState('');
+  const [faceBlocked, setFaceBlocked] = useState(false);
   const timerRef = useRef(null);
 
   useEffect(() => {
@@ -36,7 +38,8 @@ export default function StudentExam() {
         setPhase('waiting');
       }
     });
-    socket.emit('room:join', { roomId, role: 'student' });
+    connectSocket(auth.token);
+    socket.emit('room:join', { roomId });
   }, [roomId]);
 
   useEffect(() => {
@@ -81,9 +84,7 @@ export default function StudentExam() {
   function handleViolation({ type }) {
     if (!exam || phase !== 'in_progress') return;
     api.reportViolation(exam.session.id, { type }, auth.token).catch(() => {});
-    socket.emit('violation:report', {
-      roomId, studentName: auth.user.name, type, timestamp: new Date().toISOString(),
-    });
+    socket.emit('violation:report', { roomId, type, timestamp: new Date().toISOString() });
   }
 
   async function handleSubmit(force = false) {
@@ -91,7 +92,7 @@ export default function StudentExam() {
     try {
       await api.completeSession(exam.session.id, { force }, auth.token);
       clearInterval(timerRef.current);
-      socket.emit('exam:student_completed', { roomId, studentName: auth.user.name });
+      socket.emit('exam:student_completed', { roomId });
       setPhase('submitted');
     } catch (err) {
       if (force) {
@@ -103,7 +104,7 @@ export default function StudentExam() {
     }
   }
 
-  if (phase === 'loading' || !exam) return <p className="p-8 text-body">Memuat…</p>;
+  if (phase === 'loading' || !exam) return <ExamSkeleton />;
 
   if (phase === 'waiting') {
     return (
@@ -144,7 +145,7 @@ export default function StudentExam() {
 
       <div className="grid grid-cols-3 gap-6">
         <div className="col-span-1">
-          <FaceMonitor referenceEmbedding={exam.referenceEmbedding} onViolation={handleViolation} />
+          <FaceMonitor referenceEmbedding={exam.referenceEmbedding} onViolation={handleViolation} onBlockChange={setFaceBlocked} />
           {!exam.referenceEmbedding && (
             <p className="text-xs text-danger mt-2">
               Wajah kamu belum terdaftar — hubungi lecturer/admin sebelum ujian.
@@ -152,7 +153,16 @@ export default function StudentExam() {
           )}
         </div>
 
-        <div className="col-span-2 space-y-4">
+        <div className="col-span-2 space-y-4 relative">
+          {faceBlocked && (
+            <div className="sticky top-2 z-10 bg-danger text-white text-sm font-medium rounded-lg px-4 py-3 flex items-center justify-between">
+              <span>Wajah tidak terdeteksi/tidak cocok. Soal terkunci — arahkan wajah ke kamera untuk melanjutkan.</span>
+            </div>
+          )}
+          <fieldset
+            disabled={faceBlocked}
+            className={`space-y-4 border-0 p-0 m-0 ${faceBlocked ? 'opacity-40 pointer-events-none select-none' : ''}`}
+          >
           {exam.questions.map((q, i) => {
             const answered = isAnswered(q, answers[q.id]);
             return (
@@ -193,14 +203,17 @@ export default function StudentExam() {
               </div>
             );
           })}
+          </fieldset>
 
           {submitError && <p className="text-sm text-danger">{submitError}</p>}
           <button
             onClick={() => handleSubmit(false)}
-            disabled={!allAnswered}
+            disabled={!allAnswered || faceBlocked}
             className="w-full bg-primary text-white rounded-md py-3 font-medium disabled:opacity-40 disabled:cursor-not-allowed"
           >
-            {allAnswered ? 'Submit Ujian' : `Jawab semua soal dulu (${answeredCount}/${exam.questions.length})`}
+            {faceBlocked
+              ? 'Terkunci — wajah belum terdeteksi'
+              : allAnswered ? 'Submit Ujian' : `Jawab semua soal dulu (${answeredCount}/${exam.questions.length})`}
           </button>
         </div>
       </div>

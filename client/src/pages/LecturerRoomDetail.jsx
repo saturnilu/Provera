@@ -1,20 +1,28 @@
 import { useEffect, useState } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import { useModal } from '../context/ModalContext';
 import { api } from '../api';
-import { socket } from '../socket';
+import { socket, connectSocket } from '../socket';
 import QuestionEditor from '../components/QuestionEditor';
 import StatusDot from '../components/StatusDot';
+import { RoomDetailSkeleton } from '../components/Skeleton';
+import BankPickerModal from '../components/BankPickerModal';
 
 export default function LecturerRoomDetail() {
   const { roomId } = useParams();
   const { auth } = useAuth();
+  const { confirmDialog, promptDialog } = useModal();
   const navigate = useNavigate();
 
   const [data, setData] = useState(null);
   const [editingQuestion, setEditingQuestion] = useState(null);
-  const [liveEvents, setLiveEvents] = useState([]); 
-  const [statusByStudent, setStatusByStudent] = useState({}); 
+  const [showBankPicker, setShowBankPicker] = useState(false);
+  const [savingToBank, setSavingToBank] = useState(null);
+  const [liveEvents, setLiveEvents] = useState([]);
+  const [statusByStudent, setStatusByStudent] = useState({});
+  const [newAssistantEmail, setNewAssistantEmail] = useState('');
+  const [assistantError, setAssistantError] = useState('');
 
   async function refresh() {
     setData(await api.getRoom(roomId, auth.token));
@@ -22,7 +30,8 @@ export default function LecturerRoomDetail() {
   useEffect(() => { refresh(); }, [roomId]);
 
   useEffect(() => {
-    socket.emit('room:join', { roomId, role: 'lecturer' });
+    connectSocket(auth.token);
+    socket.emit('room:join', { roomId });
 
     const onViolationLive = ({ studentName, type, timestamp }) => {
       setLiveEvents((prev) => [{ studentName, type, timestamp }, ...prev].slice(0, 50));
@@ -35,21 +44,40 @@ export default function LecturerRoomDetail() {
     };
     const onExamStart = () => refresh();
     const onExamEnd = () => refresh();
+    const onParticipantJoined = () => refresh();
 
     socket.on('violation:live', onViolationLive);
     socket.on('exam:student_completed', onCompleted);
     socket.on('exam:start', onExamStart);
     socket.on('exam:end_now', onExamEnd);
+    socket.on('room:participant_joined', onParticipantJoined);
     return () => {
       socket.off('violation:live', onViolationLive);
       socket.off('exam:student_completed', onCompleted);
       socket.off('exam:start', onExamStart);
       socket.off('exam:end_now', onExamEnd);
+      socket.off('room:participant_joined', onParticipantJoined);
     };
   }, [roomId]);
 
-  if (!data) return <p className="p-8 text-body">Memuat…</p>;
-  const { room, questions, participants } = data;
+  if (!data) return <RoomDetailSkeleton />;
+  const { room, questions, participants, assistants, isOwner } = data;
+
+  async function handleAddAssistant(e) {
+    e.preventDefault();
+    setAssistantError('');
+    try {
+      await api.addAssistant(roomId, newAssistantEmail.trim(), auth.token);
+      setNewAssistantEmail('');
+      refresh();
+    } catch (err) {
+      setAssistantError(err.message || 'Gagal menambahkan asisten');
+    }
+  }
+  async function handleRemoveAssistant(userId) {
+    await api.removeAssistant(roomId, userId, auth.token);
+    refresh();
+  }
 
   async function handleAddQuestion(payload) {
     await api.addQuestion(roomId, payload, auth.token);
@@ -61,8 +89,38 @@ export default function LecturerRoomDetail() {
     refresh();
   }
   async function handleDeleteQuestion(questionId) {
-    if (!confirm('Hapus soal ini?')) return;
+    const ok = await confirmDialog({
+      title: 'Hapus soal ini?',
+      message: 'Soal dan jawaban siswa yang sudah tersimpan untuk soal ini akan ikut terhapus.',
+      variant: 'danger',
+      confirmLabel: 'Hapus',
+    });
+    if (!ok) return;
     await api.deleteQuestion(roomId, questionId, auth.token);
+    refresh();
+  }
+  async function handleSaveToBank(q) {
+    setSavingToBank(q.id);
+    try {
+      await api.createBankQuestion(
+        {
+          type: q.type,
+          prompt: q.prompt,
+          options: q.options,
+          correct_answer: q.correct_answer,
+          word_limit_min: q.word_limit_min,
+          word_limit_max: q.word_limit_max,
+          points: q.points,
+        },
+        auth.token
+      );
+    } finally {
+      setSavingToBank(null);
+    }
+  }
+  async function handleAddFromBank(ids) {
+    await api.addQuestionsFromBank(roomId, ids, auth.token);
+    setShowBankPicker(false);
     refresh();
   }
 
@@ -74,17 +132,35 @@ export default function LecturerRoomDetail() {
   function handleStart() {
     socket.emit('exam:start', { roomId });
   }
-  function handleExtend() {
-    const minutes = Number(prompt('Tambah berapa menit?', '5'));
+  async function handleExtend() {
+    const raw = await promptDialog({
+      title: 'Tambah waktu ujian',
+      message: 'Berapa menit tambahan waktu untuk semua siswa di room ini?',
+      defaultValue: '5',
+      inputType: 'number',
+      confirmLabel: 'Tambah',
+    });
+    if (raw === null) return;
+    const minutes = Number(raw);
     if (minutes > 0) socket.emit('exam:extend', { roomId, minutes });
   }
-  function handleEnd() {
-    if (confirm('Akhiri ujian sekarang untuk semua siswa?')) {
-      socket.emit('exam:end', { roomId });
-    }
+  async function handleEnd() {
+    const ok = await confirmDialog({
+      title: 'Akhiri ujian sekarang?',
+      message: 'Semua siswa akan langsung di-submit paksa, walau belum selesai menjawab.',
+      variant: 'danger',
+      confirmLabel: 'Akhiri Sekarang',
+    });
+    if (ok) socket.emit('exam:end', { roomId });
   }
   async function handleDelete() {
-    if (confirm('Hapus room ini? Kode undangan akan hilang. Nilai & log tetap tersimpan.')) {
+    const ok = await confirmDialog({
+      title: 'Hapus room ini?',
+      message: 'Kode undangan akan hilang. Nilai & log siswa yang sudah ada tetap tersimpan.',
+      variant: 'danger',
+      confirmLabel: 'Hapus Room',
+    });
+    if (ok) {
       await api.deleteRoom(roomId, auth.token);
       navigate('/lecturer');
     }
@@ -99,15 +175,18 @@ export default function LecturerRoomDetail() {
       <div className="flex justify-between items-start">
         <div>
           <h1 className="text-2xl font-semibold text-navy">{room.title}</h1>
-          <p className="text-sm text-body">{room.duration_minutes} menit · status: {room.status}</p>
+          <p className="text-sm text-body">
+            {room.duration_minutes} menit · status: {room.status}
+            {!isOwner && <span className="ml-2 text-xs font-medium text-primary bg-primary-light rounded-full px-2 py-1">Kamu asisten/pengawas</span>}
+          </p>
         </div>
         <div className="flex gap-2">
-          {isEditable && (
+          {isOwner && isEditable && (
             <button onClick={handleStart} className="bg-primary text-white rounded-md px-4 py-2 text-sm font-medium">
               Mulai Ujian
             </button>
           )}
-          {room.status === 'in_progress' && (
+          {isOwner && room.status === 'in_progress' && (
             <>
               <button onClick={handleExtend} className="border border-primary text-primary rounded-md px-4 py-2 text-sm font-medium">
                 + Waktu
@@ -122,11 +201,42 @@ export default function LecturerRoomDetail() {
               Lihat Rekap
             </Link>
           )}
-          <button onClick={handleDelete} className="border border-border text-body rounded-md px-4 py-2 text-sm font-medium">
-            Hapus Room
-          </button>
+          {isOwner && (
+            <button onClick={handleDelete} className="border border-border text-body rounded-md px-4 py-2 text-sm font-medium">
+              Hapus Room
+            </button>
+          )}
         </div>
       </div>
+
+      <section>
+        <h2 className="font-medium text-navy mb-3">Pengawas / Asisten</h2>
+        <div className="bg-card border border-border rounded-xl p-4 space-y-3">
+          {assistants.length === 0 && <p className="text-sm text-body">Belum ada asisten ditambahkan.</p>}
+          {assistants.map((a) => (
+            <div key={a.id} className="flex justify-between items-center text-sm">
+              <span>{a.name} <span className="text-body">({a.email})</span></span>
+              {isOwner && (
+                <button onClick={() => handleRemoveAssistant(a.id)} className="text-danger font-medium">Hapus</button>
+              )}
+            </div>
+          ))}
+          {isOwner && (
+            <form onSubmit={handleAddAssistant} className="flex gap-2 pt-2 border-t border-border">
+              <input
+                type="email"
+                className="flex-1 border border-border rounded-md px-3 py-2 text-sm"
+                placeholder="email lecturer yang mau ditambah"
+                value={newAssistantEmail}
+                onChange={(e) => setNewAssistantEmail(e.target.value)}
+                required
+              />
+              <button className="bg-primary text-white rounded-md px-4 py-2 text-sm font-medium">Tambah</button>
+            </form>
+          )}
+          {assistantError && <p className="text-sm text-danger">{assistantError}</p>}
+        </div>
+      </section>
 
       {room.status === 'in_progress' && (
         <section>
@@ -158,15 +268,31 @@ export default function LecturerRoomDetail() {
         </section>
       )}
 
-      {isEditable ? (
+      {isEditable && isOwner ? (
         <>
           <section>
-            <h2 className="font-medium text-navy mb-3">Soal ({questions.length})</h2>
+            <div className="flex justify-between items-center mb-3">
+              <h2 className="font-medium text-navy">Soal ({questions.length})</h2>
+              <button
+                onClick={() => setShowBankPicker(true)}
+                className="text-sm text-primary font-medium border border-primary rounded-md px-3 py-1.5"
+              >
+                + Dari Bank Soal
+              </button>
+            </div>
             <div className="space-y-2 mb-4">
               {questions.map((q, i) => (
                 <div key={q.id} className="bg-card border border-border rounded-lg p-3 text-sm flex justify-between items-center gap-3">
                   <span><span className="text-body">{i + 1}. [{q.type}]</span> {q.prompt}</span>
                   <span className="flex gap-3 shrink-0">
+                    <button
+                      onClick={() => handleSaveToBank(q)}
+                      disabled={savingToBank === q.id}
+                      className="text-body font-medium disabled:opacity-40"
+                      title="Simpan soal ini ke bank soal supaya bisa dipakai lagi di room lain"
+                    >
+                      {savingToBank === q.id ? 'Menyimpan…' : 'Simpan ke Bank'}
+                    </button>
                     <button onClick={() => setEditingQuestion(q)} className="text-primary font-medium">Edit</button>
                     <button onClick={() => handleDeleteQuestion(q.id)} className="text-danger font-medium">Hapus</button>
                   </span>
@@ -214,6 +340,10 @@ export default function LecturerRoomDetail() {
             ))}
           </ul>
         </section>
+      )}
+
+      {showBankPicker && (
+        <BankPickerModal token={auth.token} onClose={() => setShowBankPicker(false)} onConfirm={handleAddFromBank} />
       )}
     </div>
   );

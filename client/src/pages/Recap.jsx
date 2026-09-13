@@ -2,13 +2,18 @@ import { useEffect, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { api } from '../api';
+import { RecapSkeleton } from '../components/Skeleton';
 
 export default function Recap() {
   const { roomId } = useParams();
   const { auth } = useAuth();
+  const backPath = auth.user.role === 'admin' ? '/admin' : `/lecturer/rooms/${roomId}`;
+  const backLabel = auth.user.role === 'admin' ? 'Kembali ke Admin' : 'Kembali ke Room';
   const [data, setData] = useState(null);
   const [openEssay, setOpenEssay] = useState({});
   const [grading, setGrading] = useState({});
+  const [exporting, setExporting] = useState(null); 
+  const [exportError, setExportError] = useState('');
 
   function refresh() {
     return api.recap(roomId, auth.token).then(setData);
@@ -26,17 +31,126 @@ export default function Recap() {
     }
   }
 
-  if (!data) return <p className="p-8 text-body">Memuat…</p>;
+  if (!data) return <RecapSkeleton />;
+
+  async function handleExport(type) {
+    setExportError('');
+    setExporting(type);
+    try {
+      const base = data.room.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '') || 'room';
+      if (type === 'xlsx') await api.exportRecapXlsx(roomId, auth.token, `rekap-${base}.xlsx`);
+      else await api.exportRecapPdf(roomId, auth.token, `rekap-${base}.pdf`);
+    } catch (err) {
+      setExportError(err.message || 'Gagal export');
+    } finally {
+      setExporting(null);
+    }
+  }
+
+  const { stats, questionStats } = data;
+  const hardestFirst = [...(questionStats || [])].sort(
+    (a, b) => (b.wrongCount + b.unansweredCount) - (a.wrongCount + a.unansweredCount)
+  );
+  const maxBarCount = Math.max(1, ...(stats?.scoreDistribution || []).map((d) => d.count));
 
   return (
     <div className="max-w-3xl mx-auto py-10 px-4">
-      <Link to={`/lecturer/rooms/${roomId}`} className="text-sm text-primary font-medium block mb-4">&larr; Kembali ke Room</Link>
-      <h1 className="text-2xl font-semibold text-navy mb-1">Rekap — {data.room.title}</h1>
+      <Link to={backPath} className="text-sm text-primary font-medium block mb-4">&larr; {backLabel}</Link>
+      <div className="flex justify-between items-start mb-1 gap-3 flex-wrap">
+        <h1 className="text-2xl font-semibold text-navy">Rekap — {data.room.title}</h1>
+        <div className="flex gap-2">
+          <button
+            onClick={() => handleExport('xlsx')}
+            disabled={exporting !== null}
+            className="border border-border text-body rounded-md px-3 py-1.5 text-sm font-medium disabled:opacity-40"
+          >
+            {exporting === 'xlsx' ? 'Membuat Excel…' : 'Export Excel'}
+          </button>
+          <button
+            onClick={() => handleExport('pdf')}
+            disabled={exporting !== null}
+            className="border border-border text-body rounded-md px-3 py-1.5 text-sm font-medium disabled:opacity-40"
+          >
+            {exporting === 'pdf' ? 'Membuat PDF…' : 'Export PDF'}
+          </button>
+        </div>
+      </div>
+      {exportError && <p className="text-sm text-danger mb-2">{exportError}</p>}
       <p className="text-sm text-body mb-6">
         Skor dihitung otomatis dari {data.totalScorable} soal pilihan ganda/checkbox
         {data.essayQuestionCount > 0 && ` (di luar ${data.essayQuestionCount} soal essay — essay tidak dinilai otomatis, baca jawabannya di bawah)`}.
       </p>
 
+      {stats && stats.totalParticipants > 0 && (
+        <section className="mb-8">
+          <h2 className="font-medium text-navy mb-3">Ringkasan Kelas</h2>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
+            <div className="bg-card border border-border rounded-xl p-4">
+              <p className="text-xs text-body mb-1">Rata-rata</p>
+              <p className="text-xl font-semibold text-navy">{stats.averageCorrect.toFixed(1)}<span className="text-sm font-normal text-body">/{data.totalScorable}</span></p>
+            </div>
+            <div className="bg-card border border-border rounded-xl p-4">
+              <p className="text-xs text-body mb-1">Tertinggi</p>
+              <p className="text-xl font-semibold text-success">{stats.highestCorrect}<span className="text-sm font-normal text-body">/{data.totalScorable}</span></p>
+            </div>
+            <div className="bg-card border border-border rounded-xl p-4">
+              <p className="text-xs text-body mb-1">Terendah</p>
+              <p className="text-xl font-semibold text-danger">{stats.lowestCorrect}<span className="text-sm font-normal text-body">/{data.totalScorable}</span></p>
+            </div>
+            <div className="bg-card border border-border rounded-xl p-4">
+              <p className="text-xs text-body mb-1">Selesai ujian</p>
+              <p className="text-xl font-semibold text-navy">{stats.completedCount}<span className="text-sm font-normal text-body">/{stats.totalParticipants}</span></p>
+            </div>
+          </div>
+
+          {data.totalScorable > 0 && (
+            <div className="bg-card border border-border rounded-xl p-4 mb-4">
+              <p className="text-sm text-body mb-3">Distribusi skor (jumlah siswa per nilai benar)</p>
+              <div className="flex items-end gap-2 h-28">
+                {stats.scoreDistribution.map((d) => (
+                  <div key={d.score} className="flex-1 flex flex-col items-center justify-end gap-1">
+                    <span className="text-xs text-body">{d.count > 0 ? d.count : ''}</span>
+                    <div
+                      className="w-full bg-primary rounded-t-sm"
+                      style={{ height: `${Math.max(4, (d.count / maxBarCount) * 100)}%` }}
+                    />
+                    <span className="text-xs text-body">{d.score}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {hardestFirst.length > 0 && (
+            <div className="bg-card border border-border rounded-xl p-4">
+              <p className="text-sm text-body mb-3">Soal tersulit (paling banyak salah/tidak dijawab)</p>
+              <div className="space-y-2">
+                {hardestFirst.map((q, i) => {
+                  const missed = q.wrongCount + q.unansweredCount;
+                  const total = q.correctCount + missed;
+                  const pctCorrect = total > 0 ? Math.round((q.correctCount / total) * 100) : 0;
+                  return (
+                    <div key={q.id} className="text-sm">
+                      <div className="flex justify-between gap-3">
+                        <span className="text-navy">{i + 1}. {q.prompt}</span>
+                        <span className="text-body shrink-0">{pctCorrect}% benar</span>
+                      </div>
+                      <div className="w-full h-1.5 bg-background rounded-full mt-1 overflow-hidden">
+                        <div className="h-full bg-success" style={{ width: `${pctCorrect}%` }} />
+                      </div>
+                      <p className="text-xs text-body mt-1">
+                        {q.correctCount} benar · {q.wrongCount} salah · {q.unansweredCount} tidak dijawab
+                      </p>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+        </section>
+      )}
+
+      <h2 className="font-medium text-navy mb-3">Per Siswa</h2>
       <div className="space-y-3">
         {data.students.map((s) => (
           <div key={s.session_id} className="bg-card border border-border rounded-xl p-4">

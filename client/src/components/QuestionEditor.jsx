@@ -6,8 +6,18 @@ const TYPE_LABELS = {
   mcq_multi: 'Pilihan Ganda (boleh lebih dari satu)',
 };
 
-const EMPTY = { type: 'mcq_single', prompt: '', options: ['', ''], correctSingle: 0, correctMulti: [], wordMin: 0, wordMax: 200 };
-export default function QuestionEditor({ editing, onAdd, onSave, onCancel }) {
+const EMPTY = {
+  type: 'mcq_single',
+  prompt: '',
+  options: ['', ''],
+  correctSingle: 0,
+  correctMulti: [],
+  wordMin: 0,
+  wordMax: 200,
+  points: 1,
+  tag: '',
+};
+export default function QuestionEditor({ editing, onAdd, onSave, onCancel, showTag = false, showPoints = false }) {
   const [form, setForm] = useState(EMPTY);
 
   useEffect(() => {
@@ -20,6 +30,8 @@ export default function QuestionEditor({ editing, onAdd, onSave, onCancel }) {
       correctMulti: editing.type === 'mcq_multi' ? (editing.correct_answer || []) : [],
       wordMin: editing.word_limit_min ?? 0,
       wordMax: editing.word_limit_max ?? 200,
+      points: editing.points ?? 1,
+      tag: editing.tag || '',
     });
   }, [editing]);
 
@@ -27,6 +39,15 @@ export default function QuestionEditor({ editing, onAdd, onSave, onCancel }) {
     const next = [...form.options];
     next[i] = value;
     setForm({ ...form, options: next });
+  }
+
+  function removeOption(i) {
+    const options = form.options.filter((_, idx) => idx !== i);
+    const correctSingle = form.correctSingle === i ? 0 : form.correctSingle > i ? form.correctSingle - 1 : form.correctSingle;
+    const correctMulti = form.correctMulti
+      .filter((x) => x !== i)
+      .map((x) => (x > i ? x - 1 : x));
+    setForm({ ...form, options, correctSingle, correctMulti });
   }
 
   function toggleMulti(i) {
@@ -46,6 +67,8 @@ export default function QuestionEditor({ editing, onAdd, onSave, onCancel }) {
       payload.options = form.options.filter(Boolean);
       payload.correct_answer = form.type === 'mcq_multi' ? form.correctMulti : form.correctSingle;
     }
+    if (showPoints) payload.points = Number(form.points) || 1;
+    if (showTag) payload.tag = form.tag.trim() || null;
     if (editing) onSave(editing.id, payload);
     else onAdd(payload);
     if (!editing) setForm(EMPTY);
@@ -73,6 +96,25 @@ export default function QuestionEditor({ editing, onAdd, onSave, onCancel }) {
         <textarea className="w-full border border-border rounded-md px-3 py-2" rows={2}
           value={form.prompt} onChange={(e) => setForm({ ...form, prompt: e.target.value })} required />
       </div>
+
+      {(showTag || showPoints) && (
+        <div className="flex gap-3">
+          {showTag && (
+            <div className="flex-1">
+              <label className="block text-sm text-body mb-1">Kategori (opsional)</label>
+              <input className="w-full border border-border rounded-md px-3 py-2" value={form.tag}
+                onChange={(e) => setForm({ ...form, tag: e.target.value })} placeholder="mis. Bab 3" />
+            </div>
+          )}
+          {showPoints && (
+            <div className="w-28">
+              <label className="block text-sm text-body mb-1">Poin</label>
+              <input type="number" min="1" className="w-full border border-border rounded-md px-3 py-2"
+                value={form.points} onChange={(e) => setForm({ ...form, points: e.target.value })} />
+            </div>
+          )}
+        </div>
+      )}
 
       {form.type === 'essay' && (
         <div className="flex gap-3">
@@ -103,6 +145,15 @@ export default function QuestionEditor({ editing, onAdd, onSave, onCancel }) {
               <input className="flex-1 border border-border rounded-md px-3 py-2"
                 value={opt} onChange={(e) => updateOption(i, e.target.value)}
                 placeholder={`Opsi ${i + 1}`} required />
+              <button
+                type="button"
+                onClick={() => removeOption(i)}
+                disabled={form.options.length <= 2}
+                title={form.options.length <= 2 ? 'Minimal 2 opsi' : 'Hapus opsi ini'}
+                className="text-danger text-sm font-medium disabled:opacity-30 disabled:cursor-not-allowed"
+              >
+                Hapus
+              </button>
             </div>
           ))}
           <button type="button" className="text-primary text-sm font-medium"

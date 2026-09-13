@@ -1,14 +1,22 @@
 import { BrowserRouter, Routes, Route, Navigate, Link } from 'react-router-dom';
 import { AuthProvider, useAuth } from './context/AuthContext';
+import { ModalProvider } from './context/ModalContext';
 
 import Login from './pages/Login';
 import Register from './pages/Register';
+import ForgotPassword from './pages/ForgotPassword';
+import ResetPassword from './pages/ResetPassword';
+import Profile from './pages/Profile';
 import EnrollFace from './pages/EnrollFace';
 import LecturerRooms from './pages/LecturerRooms';
 import LecturerRoomDetail from './pages/LecturerRoomDetail';
 import Recap from './pages/Recap';
 import StudentJoin from './pages/StudentJoin';
 import StudentExam from './pages/StudentExam';
+import AdminDashboard from './pages/AdminDashboard';
+import QuestionBank from './pages/QuestionBank';
+import Courses from './pages/Courses';
+import CourseDetail from './pages/CourseDetail';
 
 function RequireRole({ role, children }) {
   const { auth } = useAuth();
@@ -22,11 +30,18 @@ function Nav() {
   const dashboardPath = auth ? (auth.user.role === 'lecturer' ? '/lecturer' : auth.user.role === 'student' ? '/student' : '/admin') : '/';
   return (
     <nav className="border-b border-border bg-card px-6 py-3 flex justify-between items-center">
-      <Link to="/" className="font-semibold text-navy">Quiz Platform</Link>
+      <Link to="/" className="font-semibold text-navy">Provera</Link>
       {auth && (
         <div className="flex items-center gap-4 text-sm text-body">
           <Link to={dashboardPath} className="text-primary font-medium">Dashboard</Link>
+          {auth.user.role === 'lecturer' && (
+            <>
+              <Link to="/lecturer/bank" className="text-primary font-medium">Bank Soal</Link>
+              <Link to="/lecturer/courses" className="text-primary font-medium">Mata Kuliah</Link>
+            </>
+          )}
           <span>{auth.user.name} · {auth.user.role}</span>
+          <Link to="/profile" className="text-body hover:text-primary">Profil</Link>
           <button onClick={logout} className="text-danger">Keluar</button>
         </div>
       )}
@@ -42,39 +57,37 @@ function Home() {
   return <Navigate to="/admin" />;
 }
 
-function AdminHome() {
-  return (
-    <div className="max-w-xl mx-auto py-16 px-4 text-center">
-      <h1 className="text-xl font-semibold text-navy mb-2">Admin</h1>
-      <p className="text-body text-sm">
-        Panel admin masih minimal di MVP ini, perluas sesuai kebutuhan (kelola akun lecturer,
-        lihat semua room, dsb). Lihat README bagian "Extension points".
-      </p>
-    </div>
-  );
-}
-
 export default function App() {
   return (
     <AuthProvider>
+      <ModalProvider>
       <BrowserRouter>
         <Nav />
         <Routes>
           <Route path="/" element={<Home />} />
           <Route path="/login" element={<Login />} />
           <Route path="/register" element={<Register />} />
+          <Route path="/forgot-password" element={<ForgotPassword />} />
+          <Route path="/reset-password" element={<ResetPassword />} />
 
-          <Route path="/admin" element={<RequireRole role="admin"><AdminHome /></RequireRole>} />
+          <Route path="/profile" element={<RequireRole><Profile /></RequireRole>} />
+
+          <Route path="/admin" element={<RequireRole role="admin"><AdminDashboard /></RequireRole>} />
+          <Route path="/admin/rooms/:roomId/recap" element={<RequireRole role="admin"><Recap /></RequireRole>} />
 
           <Route path="/lecturer" element={<RequireRole role="lecturer"><LecturerRooms /></RequireRole>} />
           <Route path="/lecturer/rooms/:roomId" element={<RequireRole role="lecturer"><LecturerRoomDetail /></RequireRole>} />
           <Route path="/lecturer/rooms/:roomId/recap" element={<RequireRole role="lecturer"><Recap /></RequireRole>} />
+          <Route path="/lecturer/bank" element={<RequireRole role="lecturer"><QuestionBank /></RequireRole>} />
+          <Route path="/lecturer/courses" element={<RequireRole role="lecturer"><Courses /></RequireRole>} />
+          <Route path="/lecturer/courses/:courseId" element={<RequireRole role="lecturer"><CourseDetail /></RequireRole>} />
 
           <Route path="/student" element={<RequireRole role="student"><StudentJoin /></RequireRole>} />
           <Route path="/student/enroll-face" element={<RequireRole role="student"><EnrollFace /></RequireRole>} />
           <Route path="/student/rooms/:roomId" element={<RequireRole role="student"><StudentExam /></RequireRole>} />
         </Routes>
       </BrowserRouter>
+      </ModalProvider>
     </AuthProvider>
   );
 }

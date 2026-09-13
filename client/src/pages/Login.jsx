@@ -34,8 +34,9 @@ export default function Login() {
         <input className="w-full border border-border rounded-md px-3 py-2 mb-4 outline-none focus:ring-2 focus:ring-primary-light"
           value={email} onChange={(e) => setEmail(e.target.value)} type="email" required />
         <label className="block text-sm text-body mb-1">Password</label>
-        <input className="w-full border border-border rounded-md px-3 py-2 mb-6 outline-none focus:ring-2 focus:ring-primary-light"
+        <input className="w-full border border-border rounded-md px-3 py-2 mb-2 outline-none focus:ring-2 focus:ring-primary-light"
           value={password} onChange={(e) => setPassword(e.target.value)} type="password" required />
+        <Link to="/forgot-password" className="text-sm text-primary font-medium block text-right mb-4">Lupa password?</Link>
         <button className="w-full bg-primary text-white rounded-md py-2 font-medium hover:opacity-90" type="submit">
           Masuk
         </button>
