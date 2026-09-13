@@ -1,4 +1,5 @@
 import jwt from 'jsonwebtoken';
+import db from '../db.js';
 
 export function requireAuth(req, res, next) {
   const header = req.headers.authorization;
@@ -8,7 +9,11 @@ export function requireAuth(req, res, next) {
   const token = header.slice(7);
   try {
     const payload = jwt.verify(token, process.env.JWT_SECRET);
-    req.user = payload; 
+    const user = db.prepare('SELECT is_active FROM users WHERE id = ?').get(payload.id);
+    if (!user || !user.is_active) {
+      return res.status(403).json({ error: 'This account has been deactivated' });
+    }
+    req.user = payload;
     next();
   } catch (err) {
     return res.status(401).json({ error: 'Invalid or expired token' });

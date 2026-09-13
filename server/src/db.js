@@ -86,6 +86,56 @@ CREATE TABLE IF NOT EXISTS violation_logs (
   timestamp TEXT DEFAULT (datetime('now')),
   duration_seconds REAL DEFAULT 0
 );
+
+-- Co-lecturers a room owner can add so someone else (e.g. a proctor/TA) can
+-- also monitor live violations and review the recap for that room. Only the
+-- owning lecturer (rooms.lecturer_id) can manage questions, the room itself,
+-- start/extend/end the exam, or add/remove assistants.
+CREATE TABLE IF NOT EXISTS room_assistants (
+  id TEXT PRIMARY KEY,
+  room_id TEXT NOT NULL REFERENCES rooms(id),
+  user_id TEXT NOT NULL REFERENCES users(id),
+  added_by TEXT NOT NULL REFERENCES users(id),
+  created_at TEXT DEFAULT (datetime('now')),
+  UNIQUE(room_id, user_id)
+);
+
+-- Password-reset tokens for the "lupa password" flow. A token is a random
+-- opaque string (not the JWT) with a short expiry, single-use.
+CREATE TABLE IF NOT EXISTS password_reset_tokens (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id),
+  token TEXT UNIQUE NOT NULL,
+  expires_at TEXT NOT NULL,
+  used_at TEXT,
+  created_at TEXT DEFAULT (datetime('now'))
+);
+
+-- A lecturer's "mata kuliah" — groups rooms/exams together over time so
+-- there's a history per class instead of every room being one-off.
+CREATE TABLE IF NOT EXISTS courses (
+  id TEXT PRIMARY KEY,
+  lecturer_id TEXT NOT NULL REFERENCES users(id),
+  name TEXT NOT NULL,
+  code TEXT,
+  created_at TEXT DEFAULT (datetime('now'))
+);
+
+-- Lecturer's personal, reusable pool of questions — write once, drop into
+-- any room later instead of retyping the same question every time.
+CREATE TABLE IF NOT EXISTS question_bank (
+  id TEXT PRIMARY KEY,
+  lecturer_id TEXT NOT NULL REFERENCES users(id),
+  type TEXT NOT NULL CHECK (type IN ('essay','mcq_single','mcq_multi')),
+  prompt TEXT NOT NULL,
+  options TEXT,
+  correct_answer TEXT,
+  word_limit_min INTEGER,
+  word_limit_max INTEGER,
+  points INTEGER NOT NULL DEFAULT 1,
+  tag TEXT,
+  created_at TEXT DEFAULT (datetime('now'))
+);
 `);
 
 function ensureColumn(table, column, definition) {
@@ -97,5 +147,7 @@ function ensureColumn(table, column, definition) {
 ensureColumn('rooms', 'extended_minutes', 'INTEGER NOT NULL DEFAULT 0');
 ensureColumn('rooms', 'max_participants', 'INTEGER NOT NULL DEFAULT 50');
 ensureColumn('rooms', 'join_code', 'TEXT');
+ensureColumn('users', 'is_active', 'INTEGER NOT NULL DEFAULT 1');
+ensureColumn('rooms', 'course_id', 'TEXT REFERENCES courses(id)');
 
 export default db;
